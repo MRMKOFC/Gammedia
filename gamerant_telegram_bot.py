@@ -180,9 +180,9 @@ def get_latest_article():
             '.article-img-wrapper img',
             '.featured-image img',
             '.article-featured-image img',
-            'div.featured-image-container img',  # Added for GameRant-specific structure
-            'img[src*="gamerant.com"]',  # Prefer GameRant-specific images
-            'meta[property="og:image"]',  # Fallback to og:image
+            'div.featured-image-container img',
+            'img[src*="gamerant.com"]',
+            'meta[property="og:image"]',
             'img'
         ]
         
@@ -191,7 +191,7 @@ def get_latest_article():
                 img_element = article_soup.select_one(selector)
                 if img_element:
                     image_url = img_element.get('content')
-                    if image_url and 'og-img.png' not in image_url.lower():  # Skip placeholder images
+                    if image_url and 'og-img.png' not in image_url.lower():
                         logger.info(f"Found image in og:image meta tag")
                         break
             else:
@@ -268,10 +268,17 @@ def send_telegram_message(article):
     title = escape_markdown(article['title'])
     summary = escape_markdown(article['summary'])
     
-    # Format the message with emojis outside of Markdown sections
-    message = f"⚡\n*{title}*\n\n_{summary}_\n\n🍁 | @GamediaNews_acn"
+    # Format the message with emojis, escaping the '|' character
+    message = f"⚡\n*{title}*\n\n_{summary}_\n\n🍁 \\| @GamediaNews_acn"
     
     logger.info(f"Formatted message: {message}")
+    
+    # Log byte offsets for debugging
+    byte_message = message.encode('utf-8')
+    logger.info(f"Message byte length: {len(byte_message)}")
+    for i, char in enumerate(message):
+        char_bytes = char.encode('utf-8')
+        logger.debug(f"Char at position {i}: {char} (bytes: {char_bytes})")
     
     try:
         if article['image_url'] and validate_image_url(article['image_url']):
