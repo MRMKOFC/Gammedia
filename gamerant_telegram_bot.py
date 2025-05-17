@@ -235,17 +235,31 @@ def escape_markdown(text):
         text = text.replace(char, f'\\{char}')
     return text
 
+def escape_url(text):
+    """Escape special characters in URLs for Telegram."""
+    return text.replace('_', r'\_').replace('*', r'\*').replace('[', r'\[').replace(']', r'\]')
+
 def validate_image_url(image_url):
     """Validate if the image URL is accessible and likely a real image."""
     try:
+        if not image_url or not isinstance(image_url, str):
+            return False
+            
         if 'og-img.png' in image_url.lower() or 'social' in image_url.lower():
             logger.warning(f"Skipping image URL likely a placeholder: {image_url}")
             return False
         
+        # Basic URL validation
+        if not image_url.startswith(('http://', 'https://')):
+            logger.warning(f"Invalid image URL protocol: {image_url}")
+            return False
+            
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
-        response = requests.head(image_url, headers=headers, timeout=10, allow_redirects=True)
+        
+        # Use GET instead of HEAD as some servers don't support HEAD properly
+        response = requests.get(image_url, headers=headers, timeout=10, stream=True)
         if response.status_code != 200:
             logger.warning(f"Image URL not accessible, status code: {response.status_code}")
             return False
@@ -269,7 +283,7 @@ def send_telegram_message(article, retry_count=3, retry_delay=5):
     title = escape_markdown(article['title'])
     summary = escape_markdown(article['summary'])
     
-    message = f"âš¡\n*{title}*\n\n_{summary}_\n\nðŸ \\| @GamediaNews_acn"
+    message = f"⚡\n*{title}*\n\n_{summary}_\n\n🍁 \\| @GamediaNews_acn"
     
     logger.info(f"Formatted message: {message}")
     
@@ -278,11 +292,13 @@ def send_telegram_message(article, retry_count=3, retry_delay=5):
             if article['image_url'] and validate_image_url(article['image_url']):
                 logger.info(f"Attempting to send image: {article['image_url']}")
                 send_url = f"{TELEGRAM_API_URL}/sendPhoto"
+                # Escape the image URL before sending
+                escaped_image_url = escape_url(article['image_url'])
                 payload = {
                     'chat_id': TELEGRAM_CHANNEL_ID,
-                    'photo': article['image_url'],
+                    'photo': escaped_image_url,
                     'caption': message,
-                    'parse_mode': 'Markdown'
+                    'parse_mode': 'MarkdownV2'
                 }
                 
                 response = requests.post(send_url, data=payload, timeout=30)
@@ -299,7 +315,7 @@ def send_telegram_message(article, retry_count=3, retry_delay=5):
             payload = {
                 'chat_id': TELEGRAM_CHANNEL_ID,
                 'text': message + f"\n\n{article['url']}",
-                'parse_mode': 'Markdown',
+                'parse_mode': 'MarkdownV2',
                 'disable_web_page_preview': False
             }
             
