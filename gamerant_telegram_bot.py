@@ -21,7 +21,6 @@ TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 def get_latest_article():
     """Fetch the latest article from GameRant."""
     try:
-        # Add headers to mimic a real browser
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -34,21 +33,19 @@ def get_latest_article():
         response = requests.get(GAMERANT_URL, headers=headers, timeout=30)
         response.raise_for_status()
         
-        # Log the first 1000 characters of the response for debugging
         logger.info(f"Response preview: {response.text[:1000]}")
         
         soup = BeautifulSoup(response.text, 'html.parser')
         
-        # Try multiple selectors that might match articles
         selectors = [
             'article.browse-clip', 
-            'article:not(.sidebar--trending)',  # Exclude sidebar elements
+            'article:not(.sidebar--trending)',
             'div.article-card', 
             'div.article-preview', 
             'div.post', 
             'div.entry', 
             'div.content-card',
-            'div[class*="article"]',  # More flexible selector
+            'div[class*="article"]',
             'div[class*="post"]',
             'div[class*="news"]'
         ]
@@ -56,14 +53,12 @@ def get_latest_article():
         articles = None
         used_selector = None
         
-        # Try each selector until we find articles
         for selector in selectors:
             articles = soup.select(selector)
-            # Filter out articles with no content or from sidebars
             articles = [
                 article for article in articles 
-                if 'sidebar' not in article.get('class', [])  # Exclude sidebar elements
-                and article.get_text(strip=True)  # Ensure the article has some text
+                if 'sidebar' not in article.get('class', [])
+                and article.get_text(strip=True)
             ]
             if articles:
                 used_selector = selector
@@ -71,7 +66,6 @@ def get_latest_article():
                 break
         
         if not articles:
-            # Fallback: Look for any <a> tags that might be articles
             potential_articles = soup.find_all('a', href=True)
             articles = [a for a in potential_articles if '/gaming/' in a.get('href', '')]
             if articles:
@@ -80,17 +74,14 @@ def get_latest_article():
         
         if not articles:
             logger.error("No articles found on the page")
-            # Log HTML structure for debugging
             logger.error(f"Page structure: {soup.prettify()[:1000]}...")
             return None
         
-        # Log the first few articles for debugging
-        for i, article in enumerate(articles[:3]):  # Log up to 3 articles
+        for i, article in enumerate(articles[:3]):
             logger.info(f"Article {i+1} HTML: {str(article)[:500]}...")
         
         latest_article = articles[0]
         
-        # Extract title - try multiple approaches
         title_element = None
         title_selectors = [
             'h1', 'h2', 'h3', 'h4', 
@@ -123,7 +114,6 @@ def get_latest_article():
                 logger.error("No title could be extracted, skipping article")
                 return None
         
-        # Extract URL
         if used_selector == "a[href*='/gaming/']":
             article_url = latest_article['href']
         else:
@@ -140,7 +130,6 @@ def get_latest_article():
         if not article_url.startswith('http'):
             article_url = f"https://gamerant.com{article_url}"
         
-        # Get full article to extract summary and main image
         article_headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
             'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
@@ -152,7 +141,6 @@ def get_latest_article():
         article_response.raise_for_status()
         article_soup = BeautifulSoup(article_response.text, 'html.parser')
         
-        # Extract summary
         summary_element = None
         summary_selectors = [
             'h2.subtitle', 
@@ -186,15 +174,15 @@ def get_latest_article():
             summary = "No summary available"
             logger.warning("Could not find summary, using default")
         
-        # Extract main image
         image_url = None
         image_selectors = [
             'img.header-img',
             '.article-img-wrapper img',
             '.featured-image img',
             '.article-featured-image img',
-            'meta[property="og:image"]',
-            'img[src*="gamerant.com"]',
+            'div.featured-image-container img',  # Added for GameRant-specific structure
+            'img[src*="gamerant.com"]',  # Prefer GameRant-specific images
+            'meta[property="og:image"]',  # Fallback to og:image
             'img'
         ]
         
@@ -203,7 +191,7 @@ def get_latest_article():
                 img_element = article_soup.select_one(selector)
                 if img_element:
                     image_url = img_element.get('content')
-                    if image_url:
+                    if image_url and 'og-img.png' not in image_url.lower():  # Skip placeholder images
                         logger.info(f"Found image in og:image meta tag")
                         break
             else:
@@ -214,7 +202,9 @@ def get_latest_article():
                             src = img['src']
                             if ('icon' not in src.lower() and 
                                 'logo' not in src.lower() and
-                                'avatar' not in src.lower()):
+                                'avatar' not in src.lower() and
+                                'og-img.png' not in src.lower() and
+                                'social' not in src.lower()):
                                 image_url = src
                                 logger.info(f"Found image with selector: {selector}")
                                 break
@@ -236,18 +226,55 @@ def get_latest_article():
         logger.error(traceback.format_exc())
         return None
 
+def escape_markdown(text):
+    """Escape special characters for Telegram Markdown."""
+    special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!']
+    for char in special_chars:
+        text = text.replace(char, f'\\{char}')
+    return text
+
+def validate_image_url(image_url):
+    """Validate if the image URL is accessible and likely a real image."""
+    try:
+        if 'og-img.png' in image_url.lower() or 'social' in image_url.lower():
+            logger.warning(f"Skipping image URL likely a placeholder: {image_url}")
+            return False
+        
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.head(image_url, headers=headers, timeout=10, allow_redirects=True)
+        if response.status_code != 200:
+            logger.warning(f"Image URL not accessible, status code: {response.status_code}")
+            return False
+        
+        content_type = response.headers.get('content-type', '')
+        if not content_type.startswith('image/'):
+            logger.warning(f"Image URL does not point to an image, content-type: {content_type}")
+            return False
+        
+        return True
+    except Exception as e:
+        logger.warning(f"Error validating image URL {image_url}: {e}")
+        return False
+
 def send_telegram_message(article):
     """Send article information to Telegram channel."""
     if not article:
         logger.error("No article data to send")
         return False
     
-    message = f"⚡ *{article['title']}*\n\n" \
-              f"_{article['summary']}_\n\n" \
-              f"🍁 | @GamediaNews_acn"
+    # Escape special characters in title and summary for Markdown
+    title = escape_markdown(article['title'])
+    summary = escape_markdown(article['summary'])
+    
+    # Format the message with emojis outside of Markdown sections
+    message = f"⚡\n*{title}*\n\n_{summary}_\n\n🍁 | @GamediaNews_acn"
+    
+    logger.info(f"Formatted message: {message}")
     
     try:
-        if article['image_url']:
+        if article['image_url'] and validate_image_url(article['image_url']):
             logger.info(f"Attempting to send image: {article['image_url']}")
             send_url = f"{TELEGRAM_API_URL}/sendPhoto"
             payload = {
@@ -257,17 +284,17 @@ def send_telegram_message(article):
                 'parse_mode': 'Markdown'
             }
             
-            try:
-                response = requests.post(send_url, data=payload, timeout=30)
-                if response.status_code != 200:
-                    logger.warning(f"Failed to send image, error: {response.text}")
-                    raise Exception("Image sending failed")
-                response.raise_for_status()
-                logger.info("Message with image sent successfully")
-                return True
-            except Exception as img_error:
-                logger.warning(f"Error sending image: {img_error}, falling back to text message")
+            response = requests.post(send_url, data=payload, timeout=30)
+            if response.status_code != 200:
+                logger.warning(f"Failed to send image, error: {response.text}")
+                raise Exception("Image sending failed")
+            response.raise_for_status()
+            logger.info("Message with image sent successfully")
+            return True
+        else:
+            logger.warning("Skipping image sending due to invalid or missing image URL")
         
+        # Send text message as fallback
         send_url = f"{TELEGRAM_API_URL}/sendMessage"
         payload = {
             'chat_id': TELEGRAM_CHANNEL_ID,
@@ -277,6 +304,9 @@ def send_telegram_message(article):
         }
         
         response = requests.post(send_url, data=payload, timeout=30)
+        if response.status_code != 200:
+            logger.error(f"Failed to send text message, error: {response.text}")
+            raise Exception("Text message sending failed")
         response.raise_for_status()
         logger.info("Text message sent successfully")
         return True
