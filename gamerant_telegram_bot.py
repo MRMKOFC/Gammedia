@@ -42,12 +42,15 @@ def get_latest_article():
         # Try multiple selectors that might match articles
         selectors = [
             'article.browse-clip', 
-            'article', 
-            '.article-card',
-            '.article-preview', 
-            '.post',
-            '.entry',
-            'div.content-card'
+            'article:not(.sidebar--trending)',  # Exclude sidebar elements
+            'div.article-card', 
+            'div.article-preview', 
+            'div.post', 
+            'div.entry', 
+            'div.content-card',
+            'div[class*="article"]',  # More flexible selector
+            'div[class*="post"]',
+            'div[class*="news"]'
         ]
         
         articles = None
@@ -56,13 +59,19 @@ def get_latest_article():
         # Try each selector until we find articles
         for selector in selectors:
             articles = soup.select(selector)
+            # Filter out articles with no content or from sidebars
+            articles = [
+                article for article in articles 
+                if 'sidebar' not in article.get('class', [])  # Exclude sidebar elements
+                and article.get_text(strip=True)  # Ensure the article has some text
+            ]
             if articles:
                 used_selector = selector
                 logger.info(f"Found {len(articles)} articles with selector: {selector}")
                 break
-                
+        
         if not articles:
-            # If no articles found with specific selectors, look for any <a> tags that might be articles
+            # Fallback: Look for any <a> tags that might be articles
             potential_articles = soup.find_all('a', href=True)
             articles = [a for a in potential_articles if '/gaming/' in a.get('href', '')]
             if articles:
@@ -72,8 +81,12 @@ def get_latest_article():
         if not articles:
             logger.error("No articles found on the page")
             # Log HTML structure for debugging
-            logger.error(f"Page structure: {soup.prettify()[:500]}...")
+            logger.error(f"Page structure: {soup.prettify()[:1000]}...")
             return None
+        
+        # Log the first few articles for debugging
+        for i, article in enumerate(articles[:3]):  # Log up to 3 articles
+            logger.info(f"Article {i+1} HTML: {str(article)[:500]}...")
         
         latest_article = articles[0]
         
@@ -83,13 +96,12 @@ def get_latest_article():
             'h1', 'h2', 'h3', 'h4', 
             'h5.title', 'h5', 
             '.title', '.headline', '.article-title', 
-            '[class*="title"]', '[class*="headline"]',  # More flexible selectors
-            'a[href] span', 'a[href] div'  # Fallback for nested structures
+            '[class*="title"]', '[class*="headline"]',
+            'a[href] span', 'a[href] div'
         ]
         
         for selector in title_selectors:
             if used_selector == "a[href*='/gaming/']":
-                # If we're using the fallback link approach
                 title_element = latest_article
                 break
             else:
@@ -99,16 +111,13 @@ def get_latest_article():
                     break
         
         if not title_element:
-            # Log the article HTML for debugging
             logger.error(f"Could not find title element. Article HTML: {str(latest_article)[:1000]}...")
-            # Fallback: Use any text content within the article element
             title_element = latest_article
             logger.warning("Using article element as title element")
         
         title = title_element.text.strip() if title_element else ""
         if not title:
-            # Fallback: Extract any text from the article element
-            title = latest_article.get_text(strip=True)[:100]  # Limit to 100 chars to avoid overly long titles
+            title = latest_article.get_text(strip=True)[:100]
             logger.warning(f"Extracted title from article text: {title}")
             if not title:
                 logger.error("No title could be extracted, skipping article")
@@ -116,12 +125,10 @@ def get_latest_article():
         
         # Extract URL
         if used_selector == "a[href*='/gaming/']":
-            # If we're using the fallback link approach
             article_url = latest_article['href']
         else:
             link_element = latest_article.find('a', href=True)
             if not link_element:
-                # Try to find any link in the article
                 link_element = latest_article.select_one('a[href]')
             
             if not link_element:
@@ -145,7 +152,7 @@ def get_latest_article():
         article_response.raise_for_status()
         article_soup = BeautifulSoup(article_response.text, 'html.parser')
         
-        # Extract summary - try multiple approaches
+        # Extract summary
         summary_element = None
         summary_selectors = [
             'h2.subtitle', 
@@ -179,7 +186,7 @@ def get_latest_article():
             summary = "No summary available"
             logger.warning("Could not find summary, using default")
         
-        # Extract main image - try multiple approaches
+        # Extract main image
         image_url = None
         image_selectors = [
             'img.header-img',
@@ -204,7 +211,6 @@ def get_latest_article():
                 if img_elements:
                     for img in img_elements:
                         if 'src' in img.attrs:
-                            # Skip tiny images and icons
                             src = img['src']
                             if ('icon' not in src.lower() and 
                                 'logo' not in src.lower() and
@@ -236,13 +242,11 @@ def send_telegram_message(article):
         logger.error("No article data to send")
         return False
     
-    # Format the message according to requirements
     message = f"⚡ *{article['title']}*\n\n" \
               f"_{article['summary']}_\n\n" \
               f"🍁 | @GamediaNews_acn"
     
     try:
-        # If there's an image, try sending photo with caption
         if article['image_url']:
             logger.info(f"Attempting to send image: {article['image_url']}")
             send_url = f"{TELEGRAM_API_URL}/sendPhoto"
@@ -255,7 +259,6 @@ def send_telegram_message(article):
             
             try:
                 response = requests.post(send_url, data=payload, timeout=30)
-                # If image sending fails, fallback to text message
                 if response.status_code != 200:
                     logger.warning(f"Failed to send image, error: {response.text}")
                     raise Exception("Image sending failed")
@@ -264,15 +267,13 @@ def send_telegram_message(article):
                 return True
             except Exception as img_error:
                 logger.warning(f"Error sending image: {img_error}, falling back to text message")
-                # Fallback to text message below
         
-        # Send text message (either as primary method or fallback)
         send_url = f"{TELEGRAM_API_URL}/sendMessage"
         payload = {
             'chat_id': TELEGRAM_CHANNEL_ID,
-            'text': message + f"\n\n{article['url']}",  # Include the article URL in text-only messages
+            'text': message + f"\n\n{article['url']}",
             'parse_mode': 'Markdown',
-            'disable_web_page_preview': False  # Enable link preview which might show image
+            'disable_web_page_preview': False
         }
         
         response = requests.post(send_url, data=payload, timeout=30)
@@ -302,7 +303,6 @@ def main():
     """Main function to run the bot."""
     logger.info("Starting GameRant News Bot")
     
-    # Check if Telegram credentials are set
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHANNEL_ID:
         logger.error("Telegram Bot Token or Channel ID not set in environment variables")
         return
@@ -313,7 +313,6 @@ def main():
         logger.error("Failed to fetch latest article")
         return
     
-    # Check if we've already posted this article
     last_url = get_last_article_url()
     if last_url and last_url == article['url']:
         logger.info("No new articles found")
