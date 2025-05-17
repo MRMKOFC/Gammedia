@@ -269,7 +269,7 @@ def send_telegram_message(article, retry_count=3, retry_delay=5):
     title = escape_markdown(article['title'])
     summary = escape_markdown(article['summary'])
     
-    message = f"⚡\n*{title}*\n\n_{summary}_\n\n🍁 \\| @GamediaNews_acn"
+    message = f"âš¡\n*{title}*\n\n_{summary}_\n\nðŸ \\| @GamediaNews_acn"
     
     logger.info(f"Formatted message: {message}")
     
