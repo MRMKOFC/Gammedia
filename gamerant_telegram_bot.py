@@ -79,7 +79,13 @@ def get_latest_article():
         
         # Extract title - try multiple approaches
         title_element = None
-        title_selectors = ['h1', 'h2', 'h3', 'h4', 'h5.title', 'h5', '.title', '.headline', '.article-title']
+        title_selectors = [
+            'h1', 'h2', 'h3', 'h4', 
+            'h5.title', 'h5', 
+            '.title', '.headline', '.article-title', 
+            '[class*="title"]', '[class*="headline"]',  # More flexible selectors
+            'a[href] span', 'a[href] div'  # Fallback for nested structures
+        ]
         
         for selector in title_selectors:
             if used_selector == "a[href*='/gaming/']":
@@ -93,14 +99,20 @@ def get_latest_article():
                     break
         
         if not title_element:
-            # If still no title element, use the article element itself
+            # Log the article HTML for debugging
+            logger.error(f"Could not find title element. Article HTML: {str(latest_article)[:1000]}...")
+            # Fallback: Use any text content within the article element
             title_element = latest_article
             logger.warning("Using article element as title element")
         
-        title = title_element.text.strip()
+        title = title_element.text.strip() if title_element else ""
         if not title:
-            logger.error("Empty title text")
-            return None
+            # Fallback: Extract any text from the article element
+            title = latest_article.get_text(strip=True)[:100]  # Limit to 100 chars to avoid overly long titles
+            logger.warning(f"Extracted title from article text: {title}")
+            if not title:
+                logger.error("No title could be extracted, skipping article")
+                return None
         
         # Extract URL
         if used_selector == "a[href*='/gaming/']":
