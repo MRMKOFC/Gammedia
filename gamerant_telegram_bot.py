@@ -1,10 +1,15 @@
-import os import requests import time from bs4 import BeautifulSoup import logging from datetime import datetime
+import os 
+import requests 
+import time 
+from bs4 import BeautifulSoup 
+import logging 
+from datetime import datetime
 
-Setup logging
+#Setup logging
 
 logging.basicConfig( level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' ) logger = logging.getLogger(name)
 
-Constants
+#Constants
 
 GAMERANT_URL = "https://gamerant.com/gaming/" TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID") TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
