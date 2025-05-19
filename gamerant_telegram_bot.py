@@ -1,4 +1,9 @@
-import os import requests import time from bs4 import BeautifulSoup import logging from datetime import datetime
+import os 
+import requests 
+import time from bs4 
+import BeautifulSoup 
+import logging from datetime 
+import datetime
 
 Setup logging
 
