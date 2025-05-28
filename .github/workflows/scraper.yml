@@ -27,7 +27,7 @@ jobs:
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          MAX_ARTICLES: 5  # Adjustable
+          MAX_ARTICLES: 5  # Optional: Set max articles
         run: |
           python gamerant_scraper.py
 
@@ -36,7 +36,8 @@ jobs:
           git config user.name "GitHub Actions Bot"
           git config user.email "actions@github.com"
           git add gamerant_posted.txt
-          git commit -m "Update gamerant_posted.txt" || echo "No changes to commit"
+          git diff --cached --quiet || git commit -m "Update gamerant_posted.txt"
           git push
         env:
+          # Use the built-in GitHub token or a custom PAT
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
