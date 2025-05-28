@@ -1,80 +1,196 @@
-import os 
-import requests 
-import time 
-from bs4 import BeautifulSoup 
+import requests
+from bs4 import BeautifulSoup
+import telegram
+import asyncio
 import logging
-from datetime import datetime
+from urllib.parse import urljoin
+from io import BytesIO
+import time
+import html
+import os
+from datetime import datetime, date
 
-#Setup logging
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger()
 
-logging.basicConfig( level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s' ) logger = logging.getLogger(name)
+# Telegram bot setup (use environment variables for GitHub Secrets)
+BOT_TOKEN = os.getenv("BOT_TOKEN")  # Set in GitHub Secrets
+CHANNEL_ID = os.getenv("CHANNEL_ID")  # Set in GitHub Secrets
+POST_WITHOUT_IMAGE = True  # Post text-only if no image
+MAX_RETRIES = 3  # Retry attempts for Telegram API
+RETRY_DELAY = 2  # Seconds between retries
+MAX_ARTICLES = int(os.getenv("MAX_ARTICLES", 5))  # Configurable via environment variable, default 5
+TODAY = date.today()  # May 28, 2025 (updates to May 29 at midnight)
+POSTED_FILE = "posted_articles.txt"  # File to store posted article titles
 
-#Constants
+# Initialize Telegram bot
+bot = telegram.Bot(token=BOT_TOKEN)
 
-GAMERANT_URL = "https://gamerant.com/gaming/" TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN") TELEGRAM_CHANNEL_ID = os.environ.get("TELEGRAM_CHANNEL_ID") TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+def load_posted_articles():
+    """Load previously posted article titles and their dates."""
+    posted = {}
+    if os.path.exists(POSTED_FILE):
+        with open(POSTED_FILE, "r") as f:
+            for line in f:
+                if line.strip():
+                    date_str, title = line.strip().split("|", 1)
+                    posted_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+                    posted[title] = posted_date
+    return posted
 
-MAX_CAPTION_LENGTH = 1024 RETRY_COUNT = 3 RETRY_DELAY = 5
+def save_posted_article(title):
+    """Save a posted article title with the current date."""
+    with open(POSTED_FILE, "a") as f:
+        f.write(f"{TODAY}|{title}\n")
 
-def escape_markdown_v2(text): """Escape special characters for Telegram Markdown V2.""" special_chars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'] for char in special_chars: text = text.replace(char, f'{char}') return text
-
-def validate_image_url(image_url): """Validate if the image URL is accessible and likely a real image.""" try: if not image_url or 'og-img.png' in image_url.lower() or 'social' in image_url.lower(): logger.warning(f"Skipping image URL likely a placeholder: {image_url}") return False headers = {'User-Agent': 'Mozilla/5.0'} response = requests.head(image_url, headers=headers, timeout=10, allow_redirects=True) if response.status_code != 200: logger.warning(f"Image URL not accessible, status code: {response.status_code}") return False content_type = response.headers.get('content-type', '') if not content_type.startswith('image/'): logger.warning(f"Image URL does not point to an image, content-type: {content_type}") return False return True except Exception as e: logger.warning(f"Error validating image URL {image_url}: {e}") return False
-
-def send_telegram_message(article): """Send article information to Telegram channel with retries.""" if not article: logger.error("No article data to send") return False
-
-title = escape_markdown_v2(article['title'])
-summary = escape_markdown_v2(article['summary'])
-image_url = escape_markdown_v2(article['image_url']) if article['image_url'] else ""
-
-# Construct message
-message = f"⚡\n*{title}*\n\n_{summary}_\n\n🍁 | @GamediaNews_acn"
-
-# Ensure message length does not exceed Telegram limit
-if len(message) > MAX_CAPTION_LENGTH:
-    message = message[:MAX_CAPTION_LENGTH - 3] + "..."
-
-for attempt in range(RETRY_COUNT):
-    try:
-        # Send Image if valid
-        if image_url and validate_image_url(article['image_url']):
-            logger.info(f"Attempting to send image: {image_url}")
-            send_url = f"{TELEGRAM_API_URL}/sendPhoto"
-            payload = {
-                'chat_id': TELEGRAM_CHANNEL_ID,
-                'photo': article['image_url'],
-                'caption': message,
-                'parse_mode': 'MarkdownV2'
-            }
-            response = requests.post(send_url, data=payload, timeout=30)
-            response.raise_for_status()
-            logger.info("Message with image sent successfully")
+def is_duplicate(title, posted_articles):
+    """Check if the article has already been posted today."""
+    if title in posted_articles:
+        posted_date = posted_articles[title]
+        if posted_date == TODAY:
             return True
-        else:
-            logger.warning("Skipping image due to invalid or missing image URL")
+    return False
 
-        # Send Text Message
-        send_url = f"{TELEGRAM_API_URL}/sendMessage"
-        payload = {
-            'chat_id': TELEGRAM_CHANNEL_ID,
-            'text': message,
-            'parse_mode': 'MarkdownV2',
-            'disable_web_page_preview': True
-        }
-        response = requests.post(send_url, data=payload, timeout=30)
-        response.raise_for_status()
-        logger.info("Text message sent successfully")
-        return True
+def escape_html(text):
+    """Escape HTML special characters to prevent formatting issues."""
+    if not text:
+        return text
+    return html.escape(text)
 
+def parse_article_date(article):
+    """Extract and parse the article's publication date."""
+    try:
+        date_elem = article.select_one("time, [class*='date']")
+        if date_elem and date_elem.text:
+            date_str = date_elem.text.strip()
+            try:
+                article_date = datetime.strptime(date_str, "%B %d, %Y").date()
+            except ValueError:
+                article_date = datetime.strptime(date_str, "%Y-%m-%d").date()
+            return article_date
     except Exception as e:
-        logger.error(f"Error sending message (attempt {attempt+1}/{RETRY_COUNT}): {e}")
-        time.sleep(RETRY_DELAY)
+        logger.error(f"Error parsing date for article: {e}")
+    return None
 
-logger.error("Max retries reached. Message sending failed.")
-return False
+async def send_to_telegram(title, summary, image_data=None):
+    # Escape HTML characters
+    title = escape_html(title)
+    summary = escape_html(summary)
+    
+    # Format message using HTML
+    message = f"<b>{title}</b> ⚡\n\n<i>{summary}</i>\n\n🍁 | @GamediaNews_acn"
+    
+    # Log the formatted message for debugging
+    logger.info(f"Formatted message: {message}")
+    
+    for attempt in range(1, MAX_RETRIES + 1):
+        try:
+            if image_data:
+                await bot.send_photo(
+                    chat_id=CHANNEL_ID,
+                    photo=image_data,
+                    caption=message,
+                    parse_mode="HTML"
+                )
+            else:
+                await bot.send_message(
+                    chat_id=CHANNEL_ID,
+                    text=message,
+                    parse_mode="HTML"
+                )
+            logger.info(f"Posted: {title}")
+            return
+        except telegram.error.TimedOut:
+            logger.warning(f"Timeout on attempt {attempt} for {title}. Retrying...")
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_DELAY)
+            continue
+        except telegram.error.BadRequest as e:
+            logger.error(f"BadRequest for {title}: {e}")
+            return
+        except Exception as e:
+            logger.error(f"Error posting {title}: {e}")
+            return
+    
+    logger.error(f"Failed to post {title} after {MAX_RETRIES} attempts")
 
-def main(): logger.info("Starting GameRant News Bot") articles = [ { 'title': "New Game Update: Exciting Features Unveiled!", 'summary': "The latest game update introduces new characters, missions, and an expanded world map.", 'image_url': "https://example.com/image.png" }, { 'title': "Upcoming Event in Popular Game", 'summary': "A special in-game event is set to begin next week.", 'image_url': "https://example.com/invalid-image.png" } ]
+async def scrape_gamerant():
+    url = "https://gamerant.com/gaming/"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36"
+    }
+    
+    # Load previously posted articles
+    posted_articles = load_posted_articles()
+    
+    try:
+        # Fetch webpage
+        response = requests.get(url, headers=headers, timeout=10)
+        response.raise_for_status()
+        soup = BeautifulSoup(response.text, "html.parser")
+        
+        # Find article elements
+        articles = soup.select("div.display-card.article")[:MAX_ARTICLES]
+        if not articles:
+            logger.warning("No articles found with 'div.display-card.article'. Check HTML in gamerant.html.")
+            with open("gamerant.html", "w", encoding="utf-8") as f:
+                f.write(soup.prettify())
+            return
+        
+        for article in articles:
+            # Extract publication date
+            article_date = parse_article_date(article)
+            if not article_date or article_date != TODAY:
+                logger.info(f"Skipping article dated {article_date}, not from today ({TODAY})")
+                continue
+            
+            # Extract title
+            title_elem = article.select_one("h5, h3, [class*='title']")
+            title = title_elem.text.strip() if title_elem else None
+            if not title or title == "No title":
+                logger.info("Skipping article with no valid title")
+                continue
+            
+            # Check for duplicates
+            if is_duplicate(title, posted_articles):
+                logger.info(f"Skipping duplicate article: {title}")
+                continue
+            
+            # Extract short summary (150 characters)
+            summary_elem = article.select_one("p.synopsis, p, [class*='excerpt']")
+            summary = summary_elem.text.strip()[:150] + "..." if summary_elem else "No summary available"
+            
+            # Extract and download image
+            image_data = None
+            image_elem = article.select_one("img[data-src], img[src]")
+            if image_elem and "data-src" in image_elem.attrs:
+                image_url = urljoin(url, image_elem["data-src"])
+            elif image_elem and "src" in image_elem.attrs:
+                image_url = urljoin(url, image_elem["src"])
+            else:
+                image_url = None
+            
+            if image_url:
+                try:
+                    image_response = requests.get(image_url, timeout=5)
+                    image_response.raise_for_status()
+                    image_data = BytesIO(image_response.content)
+                except Exception as e:
+                    logger.error(f"Error downloading image for {title}: {e}")
+            
+            # Send to Telegram
+            await send_to_telegram(title, summary, image_data if image_data or POST_WITHOUT_IMAGE else None)
+            
+            # Save the posted article title
+            save_posted_article(title)
+            posted_articles[title] = TODAY
+    
+    except Exception as e:
+        logger.error(f"Error scraping GameRant: {e}")
 
-for article in articles:
-    send_telegram_message(article)
+async def main():
+    await scrape_gamerant()
 
-if name == "main": main()
-
+if __name__ == "__main__":
+    asyncio.run(main())
