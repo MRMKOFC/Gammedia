@@ -1,7 +1,6 @@
 import requests
 from bs4 import BeautifulSoup
 import telegram
-import asyncio
 import logging
 from urllib.parse import urljoin
 from io import BytesIO
@@ -15,19 +14,11 @@ import time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger()
 
-# Secrets (from GitHub Actions env)
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHANNEL_ID = os.getenv("CHANNEL_ID")
 
-# Settings
-POST_WITHOUT_IMAGE = True
-MAX_RETRIES = 3
-RETRY_DELAY = 2
-MIN_POSTS = 7
-
 bot = telegram.Bot(token=BOT_TOKEN)
 
-# Load posted articles
 today = datetime.date.today().isoformat()
 CACHE_FILE = "posted.json"
 if os.path.exists(CACHE_FILE):
@@ -46,30 +37,20 @@ def save_cache():
 def escape_html(text):
     return html.escape(text) if text else text
 
-async def send_to_telegram(title, summary, image_data=None):
+def send_to_telegram(title, summary, image_data=None):
     title = escape_html(title)
     summary = escape_html(summary)
     message = f"<b>{title}</b> ⚡\n\n<i>{summary}</i>\n\n🍁 | @GamediaNews_acn"
-    
-    for attempt in range(1, MAX_RETRIES + 1):
-        try:
-            if image_data:
-                await bot.send_photo(chat_id=CHANNEL_ID, photo=image_data, caption=message, parse_mode="HTML")
-            else:
-                await bot.send_message(chat_id=CHANNEL_ID, text=message, parse_mode="HTML")
-            logger.info(f"Posted: {title}")
-            return True
-        except telegram.error.TimedOut:
-            logger.warning(f"Timeout (try {attempt}) for {title}")
-            await asyncio.sleep(RETRY_DELAY)
-        except telegram.error.BadRequest as e:
-            logger.error(f"BadRequest for {title}: {e}")
-            return False
-        except Exception as e:
-            logger.error(f"Error posting {title}: {e}")
-            return False
-    logger.error(f"Failed to post: {title}")
-    return False
+    try:
+        if image_data:
+            bot.send_photo(chat_id=CHANNEL_ID, photo=image_data, caption=message, parse_mode="HTML")
+        else:
+            bot.send_message(chat_id=CHANNEL_ID, text=message, parse_mode="HTML")
+        logger.info(f"Posted: {title}")
+        return True
+    except Exception as e:
+        logger.error(f"Error posting {title}: {e}")
+        return False
 
 def safe_request(url, headers, retries=3):
     for i in range(retries):
@@ -80,15 +61,11 @@ def safe_request(url, headers, retries=3):
             time.sleep(2)
     raise Exception("Failed after retries")
 
-async def scrape_gamerant():
+def scrape_gamerant():
     url = "https://gamerant.com/gaming/"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/125.0.0.0 Safari/537.36",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-        "Connection": "keep-alive",
+        "User-Agent": "Mozilla/5.0",
+        "Accept": "text/html",
     }
 
     try:
@@ -112,24 +89,22 @@ async def scrape_gamerant():
             image_elem = article.select_one("img[data-src], img[src]")
             if image_elem:
                 image_url = image_elem.get("data-src") or image_elem.get("src")
-                if image_url:
-                    try:
-                        image_response = requests.get(urljoin(url, image_url), timeout=5)
-                        image_response.raise_for_status()
-                        image_data = BytesIO(image_response.content)
-                    except Exception as e:
-                        logger.error(f"Image download failed for {title}: {e}")
+                try:
+                    image_response = requests.get(urljoin(url, image_url), timeout=5)
+                    image_response.raise_for_status()
+                    image_data = BytesIO(image_response.content)
+                except Exception as e:
+                    logger.warning(f"Image download failed: {e}")
 
-            success = await send_to_telegram(title, summary, image_data if image_data or POST_WITHOUT_IMAGE else None)
-            if success:
+            if send_to_telegram(title, summary, image_data):
                 posted_today.append(title)
                 posted_count += 1
                 save_cache()
 
-            await asyncio.sleep(1)
-
-            if posted_count >= MIN_POSTS:
+            if posted_count >= 7:
                 break
+
+            time.sleep(1)
 
         if posted_count == 0:
             logger.info("No new articles to post.")
@@ -137,8 +112,5 @@ async def scrape_gamerant():
     except Exception as e:
         logger.error(f"Scrape error: {e}")
 
-async def main():
-    await scrape_gamerant()
-
 if __name__ == "__main__":
-    asyncio.run(main())
+    scrape_gamerant()
