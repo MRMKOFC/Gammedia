@@ -22,7 +22,7 @@ MAX_RETRIES = 3  # Retry attempts for Telegram API
 RETRY_DELAY = 2  # Seconds between retries
 MAX_ARTICLES = int(os.getenv("MAX_ARTICLES", 5))  # Configurable via environment variable, default 5
 TODAY = date.today()  # May 28, 2025 (updates to May 29 at midnight)
-POSTED_FILE = "posted_articles.txt"  # File to store posted article titles
+POSTED_FILE = "gamerant_posted.txt"  # Updated name for specificity
 
 # Initialize Telegram bot
 bot = telegram.Bot(token=BOT_TOKEN)
