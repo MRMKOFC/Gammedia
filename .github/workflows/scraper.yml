@@ -1,43 +1,28 @@
-name: GameRant Scraper
+name: Post GameRant News
 
 on:
   schedule:
-    - cron: "*/30 * * * *"  # Runs every 30 minutes
-  workflow_dispatch:  # Allows manual triggering
+    - cron: "*/30 * * * *"  # Every 30 minutes
+  workflow_dispatch:
 
 jobs:
-  scrape-and-post:
+  post-news:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout code
         uses: actions/checkout@v3
 
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.12"
+          python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
-      - name: Run scraper script
+      - name: Run script
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHANNEL_ID: ${{ secrets.CHANNEL_ID }}
-          MAX_ARTICLES: 5  # Optional: Set max articles
-        run: |
-          python gamerant_scraper.py
-
-      - name: Commit gamerant_posted.txt
-        run: |
-          git config user.name "GitHub Actions Bot"
-          git config user.email "actions@github.com"
-          git add gamerant_posted.txt
-          git diff --cached --quiet || git commit -m "Update gamerant_posted.txt"
-          git push
-        env:
-          # Use the built-in GitHub token or a custom PAT
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: python main.py
